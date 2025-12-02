@@ -1,0 +1,33 @@
+# 通用配置
+project_name: 'Image Segmentation'  # 项目名称
+seed: 42  # 随机数种子
+device: 'cuda'
+
+# 路径配置
+dir:
+  data_dir: '../Data'
+  log_dir: '../Logs'
+  model_dir: '../Models/checkpoints'
+path:
+  model_path: '../Models/checkpoints/model.pth'
+
+# 模型配置
+model:
+  name: 'UNet'
+
+# 数据加载和预处理
+data:
+  num_workers: 4
+  image_crop_size: 256  # 训练时随机裁剪的图片大小
+
+# 训练参数
+epochs: 10
+batch_size: 32
+learning_rate: 0.001
+optimizer: 'AdamW'
+weight_decay: !!float 1e-4  # 解析为浮点数
+loss_function: 'RMSE'
+num_classes: 21  # PASCAL VOC数据集输出类别: 20 前景 + 1 背景
+ignore_class: 255  # 忽略的类别（255: 背景)
+in_channels: 3  # 波段数, RGB即为3波段
+

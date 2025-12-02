@@ -1,0 +1,8 @@
+# 数据集、日志和模型
+Logs/
+Data/
+Models/
+
+# pycharm相关
+.idea/
+__pycache__/
