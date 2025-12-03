@@ -8,17 +8,19 @@ dir:
   data_dir: '../Data'
   log_dir: '../Logs'
   model_dir: '../Models/checkpoints'
+  chart_dir: '../Charts'
 path:
   model_path: '../Models/checkpoints/model.pth'
-
-# 模型配置
-model:
-  name: 'UNet'
+  unet_path: '../Models/checkpoints/unet.pth'
+  attention_unet_path: '../Models/checkpoints/attention_unet.pth'
+  template_path: '../Data/VOCdevkit/VOC2012/SegmentationClass/2007_000032.png'  # 模板图片(用于获取target的颜色映射表/调色板)
 
 # 数据加载和预处理
 data:
   num_workers: 4
   image_crop_size: 256  # 训练时随机裁剪的图片大小
+  rgb_mean: [0.485, 0.456, 0.406]  # RGB三波段的均值(用于标准化和反标准化)
+  rgb_std: [0.229, 0.224, 0.225]  # RGB三波段的标准差(用于标准化和反标准化)
 
 # 训练参数
 epochs: 10

@@ -37,14 +37,15 @@ def load_config(config_path):
 # VOC数据集类
 class VOCDataset(Dataset):
 
-    def __init__(self, root_dir, image_set, year='2012', crop_size=256):
+    def __init__(self, config, image_set, year='2012'):
         self.voc = VOCSegmentation(
-            root=root_dir,  # 数据集输出路径
+            root=config['dir']['data_dir'],  # 数据集输出路径
             year=year,  # 数据集年份
             image_set=image_set,  # 训练数据集(train) or 验证数据集(val)
             download=False,
         )
-        self.transform = ImageTransform(mode=image_set, crop_size=crop_size)
+        self.transform = ImageTransform(mode=image_set, crop_size=config['data']['image_crop_size'],
+                                        rgb_mean=config['data']['rgb_mean'], rgb_std=config['data']['rgb_std'])
 
     def __len__(self):
         return len(self.voc)
@@ -67,7 +68,7 @@ def pre_dataloader(config, mode, batch_size, num_workers=0):
     """
 
     # 下载和预处理VOC数据集
-    dataset = VOCDataset(root_dir=config['dir']['data_dir'], image_set=mode, crop_size=config['data']['image_crop_size'])
+    dataset = VOCDataset(config, image_set=mode)
 
     # 加载器
     dataloader = DataLoader(dataset, batch_size=batch_size,
@@ -82,11 +83,12 @@ def pre_dataloader(config, mode, batch_size, num_workers=0):
 
 # transform(数据预处理)
 class ImageTransform():
-    def __init__(self, mode, crop_size):
+    def __init__(self, mode, crop_size, rgb_mean, rgb_std):
         self.mode = mode  # 训练模式 or 验证模式
         self.crop_size = crop_size  # 随机裁剪后的尺寸
-        self.mean = [0.485, 0.456, 0.406]  # VOC数据集三个波段的均值和标准差
-        self.std = [0.229, 0.224, 0.225]
+        self.mean = rgb_mean  # VOC数据集三个波段的均值和标准差
+        self.std = rgb_std
+
     def __call__(self, image, target):
         """transform处理"""
 
@@ -219,6 +221,9 @@ class AttentionUNet(nn.Module):
         # Final Output
         self.final_conv = nn.Conv2d(64, out_channels, kernel_size=1)
 
+        # 模型名称
+        self.name = 'attention_unet'
+
     def forward(self, x):
         # Encoder
         e1 = self.enc1(x)
@@ -271,10 +276,103 @@ class AttentionUNet(nn.Module):
 
         return loss
 
+
+class StandardUNet(nn.Module):
+    def __init__(self, in_channels=3, out_channels=21):
+        super(StandardUNet, self).__init__()
+
+        # --- Encoder (收缩路径) ---
+        # 与 Attention U-Net 完全一致
+        self.enc1 = ConvBlock(in_channels, 64)
+        self.enc2 = ConvBlock(64, 128)
+        self.enc3 = ConvBlock(128, 256)
+        self.enc4 = ConvBlock(256, 512)
+
+        # Bottleneck (瓶颈层)
+        self.enc5 = ConvBlock(512, 1024)
+
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+
+        # --- Decoder (扩张路径) ---
+
+        # Up4
+        self.up4 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        self.dec4 = ConvBlock(1024 + 512, 512)  # 输入通道 = Bottleneck(1024) + Skip(512)
+
+        # Up3
+        self.up3 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        self.dec3 = ConvBlock(512 + 256, 256)  # 输入通道 = Up4(512) + Skip(256)
+
+        # Up2
+        self.up2 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        self.dec2 = ConvBlock(256 + 128, 128)  # 输入通道 = Up3(256) + Skip(128)
+
+        # Up1
+        self.up1 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        self.dec1 = ConvBlock(128 + 64, 64)  # 输入通道 = Up2(128) + Skip(64)
+
+        # Final Output
+        self.final_conv = nn.Conv2d(64, out_channels, kernel_size=1)
+
+        # 模型名称
+        self.name = 'unet'
+
+    def forward(self, x):
+        # --- Encoder Forward ---
+        e1 = self.enc1(x)
+        p1 = self.pool(e1)
+
+        e2 = self.enc2(p1)
+        p2 = self.pool(e2)
+
+        e3 = self.enc3(p2)
+        p3 = self.pool(e3)
+
+        e4 = self.enc4(p3)
+        p4 = self.pool(e4)
+
+        b = self.enc5(p4)
+
+        # --- Decoder Forward ---
+        # 关键区别：直接拼接 (torch.cat)，没有 AttentionGate
+
+        # D4
+        d4 = self.up4(b)
+        # 此时 d4 是深层特征(Upsampled), e4 是浅层特征(Skip Connection)
+        # 直接把 e4 和 d4 拼在一起
+        d4 = torch.cat((e4, d4), dim=1)
+        d4 = self.dec4(d4)
+
+        # D3
+        d3 = self.up3(d4)
+        d3 = torch.cat((e3, d3), dim=1)
+        d3 = self.dec3(d3)
+
+        # D2
+        d2 = self.up2(d3)
+        d2 = torch.cat((e2, d2), dim=1)
+        d2 = self.dec2(d2)
+
+        # D1
+        d1 = self.up1(d2)
+        d1 = torch.cat((e1, d1), dim=1)
+        d1 = self.dec1(d1)
+
+        out = self.final_conv(d1)
+        return out
+
+    @staticmethod  # 静态方法既可以创建实例调用例如model.cal_loss()也可以不实例化调用例如AttentionUNet.cal_loss()
+    def cal_loss(prediction, target, ignore_index):
+        criterion = nn.CrossEntropyLoss(ignore_index=ignore_index)
+        loss = criterion(prediction, target)
+
+        return loss
+
+
 def model_train(train_set: DataLoader, dev_set: DataLoader, model: nn.Module, config,
                 device: str | torch.device = 'CPU', log_writer: SummaryWriter = None):
     """
-    基于COVID19数据集进行训练
+    基于VOC数据集进行训练
     :param train_set: 训练集
     :param dev_set: 验证集
     :param model: 模型
@@ -311,7 +409,7 @@ def model_train(train_set: DataLoader, dev_set: DataLoader, model: nn.Module, co
             optimizer.step()  # 基于计算的梯度更新参数
 
             # 更新batch进度条
-            batch_pbar.set_postfix_str('Loss: {}'.format(loss))
+            batch_pbar.set_postfix_str('Loss: {:.6f}'.format(loss))
             # 添加当前batch的loss值
             train_loss_list.append(loss.item())
 
@@ -321,7 +419,7 @@ def model_train(train_set: DataLoader, dev_set: DataLoader, model: nn.Module, co
         avg_dev_loss = model_val(dev_set, model, device, config['ignore_class'])
 
         # 更新epoch进度条
-        epoch_pbar.set_postfix_str('Loss: {}'.format(avg_train_loss))
+        epoch_pbar.set_postfix_str('Loss: {:.6f}'.format(avg_train_loss))
 
         # 保存日志
         if log_writer is not None:
@@ -331,7 +429,7 @@ def model_train(train_set: DataLoader, dev_set: DataLoader, model: nn.Module, co
         # 保存模型
         if avg_dev_loss < min_mse:  # 如果当前阶段的模型的损失值比之前的都要好, 那么保存
             min_mse = avg_dev_loss
-            torch.save(model, config['path']['model_path'])
+            torch.save(model, config['path'][f'{model.name}_path'])
 
     epoch_pbar.close()
 
@@ -362,3 +460,7 @@ def model_val(dev_set: DataLoader, model: nn.Module, device: str | torch.device,
     avg_dev_loss = np.mean(dev_loss_list)
 
     return avg_dev_loss
+
+
+def cal_metrics():
+    pass
