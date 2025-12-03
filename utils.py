@@ -111,9 +111,10 @@ class ImageTransform():
             if torch.rand(1) > 0.5:
                 image = F.hflip(image)  # 水平翻转
                 target = F.hflip(target)
-            if torch.rand(1) > 0.5:
-                image = F.vflip(image)  # 垂直翻转
-                target = F.vflip(target)
+            # 一般做Data Augmentation不进行上下颠倒
+            # if torch.rand(1) > 0.5:
+            #     image = F.vflip(image)  # 垂直翻转
+            #     target = F.vflip(target)
 
         # image图像归一化
         image = F.to_tensor(image)  # 完全等价于实例化的ToTensor方法的作用

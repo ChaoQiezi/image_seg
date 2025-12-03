@@ -13,7 +13,6 @@ import yaml
 import torch
 from datetime import datetime
 from torch.utils.tensorboard import SummaryWriter
-import torchvision
 
 from utils import pre_dataloader, AttentionUNet, model_train, StandardUNet
 

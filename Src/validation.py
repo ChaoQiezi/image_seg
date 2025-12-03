@@ -7,9 +7,10 @@
 """
 This script is used to 验证+可视化
 """
+
 import os
-import yaml
 import numpy as np
+import yaml
 import torch
 import torch.nn as nn
 from PIL import Image
@@ -77,10 +78,16 @@ def visualize_comparison(images, targets, att_preds, unet_preds, config):
     #     ···
     #     """
 
+    # 反标准化参数
+    rgb_std = np.array(config['data']['rgb_std']).reshape(1, 1, 3)  # (H, W, C)
+    rgb_mean = np.array(config['data']['rgb_mean']).reshape(1, 1, 3)
+
     # 绘制对比
     for cur_image, cur_target, cur_att_pred, cur_unet_pred in zip(images, targets, att_preds, unet_preds):
         # 对cur_image反标准化
-        cur_image = cur_image * config['data']['rgb_std'] + config['data']['rgb_mean']
+        cur_image = cur_image.permute(1, 2, 0).detach().cpu().numpy()  # (C, H, W) -> (H, W, C)
+        cur_image = cur_image * rgb_std + rgb_mean  # 反标准化回到ToTensor之后的结果0-1范围
+        cur_image = np.clip(cur_image, 0, 1)
 
         # 将图像分割结果(真实+预测)转换为RGB图片
         cur_target = decode_segmap(cur_target, config['data']['template_path'])
@@ -102,42 +109,66 @@ def visualize_comparison(images, targets, att_preds, unet_preds, config):
         axes[3].set_title('U-Net Prediction')
 
         # 保存
-        cur_out_path = os.path.join(config['dir']['chart_dir'], 'MyTemp.png')
+        out_dir = config['dir']['chart_dir']
+        if not os.path.exists(out_dir):
+            os.makedirs(out_dir)
+        cur_out_path = os.path.join(out_dir, 'MyTemp.png')  # 保存路径
         plt.savefig(cur_out_path, dpi=300)
         break
 
 
-# 准备
-config_path = '../config.yaml'
+def main():
+    # 准备
+    config_path = '../config.yaml'
+    att_miou_list, att_dice_list = [], []  # 用于miou和dice精度指标均值计算
+    unet_miou_list, unet_dice_list = [], []
+    total_batches = 0
 
-# 加载配置文件
-with open(config_path, 'r') as f:
-    config = yaml.safe_load(f)
-device = torch.device(config['device'])
+    # 加载配置文件
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    device = torch.device(config['device'])
 
-# 验证数据集加载
-val_loader = pre_dataloader(config, mode='val',
-                            batch_size=config['batch_size'],
-                            num_workers=config['data']['num_workers'],
-                            )
-# 加载训练好的模型
-att_model: nn.Module = torch.load(config['path'][f'attention_unet_path'])
-unet_model: nn.Module = torch.load(config['path'][f'unet_path'])
+    # 验证数据集加载
+    val_loader = pre_dataloader(config, mode='val',
+                                batch_size=config['batch_size'],
+                                num_workers=config['data']['num_workers'],
+                                )
+    # 加载训练好的模型
+    att_model: nn.Module = torch.load(config['path'][f'attention_unet_path'])
+    unet_model: nn.Module = torch.load(config['path'][f'unet_path'])
 
-# 验证
-att_model.eval()  # 评估模式
-unet_model.eval()
-for images, targets in val_loader:
-    # 预测
-    images, targets = images.to(device), targets.to(device)
+    # 验证
+    att_model.eval()  # 评估模式
+    unet_model.eval()
     with torch.no_grad():  # 禁用梯度计算
-        att_preds = att_model(images)
-        unet_preds = unet_model(images)
+        for images, targets in val_loader:
+            # 预测
+            images, targets = images.to(device), targets.to(device)
+            att_preds = att_model(images)  # (B, C, H, W)
+            unet_preds = unet_model(images)
+            att_preds = torch.argmax(att_preds, dim=1)  # --> (B, H, W)
+            unet_preds = torch.argmax(unet_preds, dim=1)
 
-    # 定量结果(精度指标)
-    att_miou, att_dice = cal_metrics(att_preds, targets, config['num_classes'], config['ignore_class'])
-    unet_miou, unet_dice = cal_metrics(unet_preds, targets, config['num_classes'], config['ignore_class'])
+            # 定量结果(精度指标)
+            att_miou, att_dice = cal_metrics(att_preds, targets, config['num_classes'], config['ignore_class'])
+            unet_miou, unet_dice = cal_metrics(unet_preds, targets, config['num_classes'], config['ignore_class'])
+            att_miou_list.append(att_miou)
+            att_dice_list.append(att_dice)
+            unet_miou_list.append(unet_miou)
+            unet_dice_list.append(unet_dice)
 
-    # 定性结果(图像分割结果)
-    visualize_comparison(images, targets, att_preds, unet_preds, config)
+            # 定性结果(图像分割结果)
+            visualize_comparison(images, targets, att_preds, unet_preds, config)
 
+    # 精度指标计算
+    att_miou = np.mean(att_miou_list)
+    att_dice = np.mean(att_dice_list)
+    print(f'Attention UNet: mIoU: {att_miou:.4f}, mDice: {att_dice:.4f}')
+    unet_miou = np.mean(unet_miou_list)
+    unet_dice = np.mean(unet_dice_list)
+    print(f'U-Net: mIoU: {unet_miou:.4f}, mDice: {unet_dice:.4f}')
+
+
+if __name__ == '__main__':
+    main()

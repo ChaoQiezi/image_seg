@@ -140,8 +140,8 @@ def main():
 
     # 1. 定量评估
     print("Running Quantitative Evaluation...")
-    u_miou_list, u_dice_list =,
-    a_miou_list, a_dice_list =,
+    u_miou_list, u_dice_list = [], []
+    a_miou_list, a_dice_list = [], []
 
     unet.eval()
     att_unet.eval()
